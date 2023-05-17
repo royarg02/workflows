@@ -4,14 +4,13 @@ on:
     inputs:
       enable_royarg_repo:
         description: >
-          'Whether to enable royarg-repo to pull in dependencies from while
-          building'
+          Enable royarg-repo to pull in dependencies from while building
         type: boolean
         default: false
       validate_binary:
         description: >
-          'The command to validate built binary from the package. Empty input
-          skips this step'
+          Command to validate built binary from the package. Empty input skips
+          this step
         type: string
         required: false
 
@@ -23,14 +22,14 @@ jobs:
     steps:
       - name: Update container image
         run: pacman -Syu --noconfirm
-      - name: Install git and namcap
+      - name: Install git, namcap and wget
         run: pacman -S --needed --noconfirm git namcap wget
       - name: Modify permissions for build directories
+        # makepkg does not run with root permissions. Use the "nobody" user to
+        # build packages instead. Modify the permissions of the directories
+        # used for building the packages. Also provide no-password sudo to
+        # "nobody"
         run: |
-          # makepkg does not run with root permissions. Use the "nobody" user to
-          # build packages instead. Modify the permissions of the directories
-          # used for building the packages. Also provide no-password sudo to
-          # "nobody"
           chgrp nobody ${RUNNER_TEMP} ${GITHUB_WORKSPACE}
           chmod g+ws ${RUNNER_TEMP} ${GITHUB_WORKSPACE}
           setfacl -m u::rwx,g::rwx ${RUNNER_TEMP} ${GITHUB_WORKSPACE}
@@ -44,25 +43,21 @@ jobs:
       - name: Enable "royarg-repo" repository
         if: ${{ inputs.enable_royarg_repo }}
         run: |
-          # Generate a default secret key to sign with
           pacman-key --init
-          # Fetch the public key of packager and trust it
           wget -O ${RUNNER_TEMP}/key.aexpk https://royarg02.github.io/anurag.aexpk
           pacman-key --add ${RUNNER_TEMP}/key.aexpk
           pacman-key --lsign-key D7EBD6CF
-          # Add "royarg-repo" repository; quoting the delimiter will prevent
-          # expansion
           cat << "END" >> /etc/pacman.conf
           [royarg-repo]
           Server = https://royarg02.github.io/$repo/os/$arch
           END
+          pacman -Syu --noconfirm
       - name: Checkout
         uses: actions/checkout@v3
       - name: Validate PKGBUILD
         run: |
           namcap PKGBUILD
           pkgname=$(grep -E 'pkgname' .SRCINFO | sed -e 's/.*= //')
-          # yay uses systemd-run if launched with elevated privileges
           grep -E 'depends' .SRCINFO | sed -e 's/.*depends = //' -e 's/:.*//' | \
             xargs sudo -u nobody yay -S --needed --noconfirm
           sudo -u nobody makepkg --syncdeps --noconfirm
@@ -70,7 +65,7 @@ jobs:
           namcap "${pkgname}"-*"${PKGEXT}"
           pacman -Qilp "${pkgname}"-*"${PKGEXT}"
       - name: Validate SRCINFO
-        run: sudo -u build makepkg --printsrcinfo | diff --ignore-blank-lines .SRCINFO -
+        run: sudo -u nobody makepkg --printsrcinfo | diff --ignore-blank-lines .SRCINFO -
       - name: Install package and validate binary
         if: ${{ inputs.validate_binary }}
         run: |
